@@ -43,6 +43,24 @@ export interface QQQuotedMessage {
   excerpt?: boolean
 }
 
+const QQ_USER_ID_PREFIX = 'qq:user:'
+
+export function QQUserId(appId: string, openId: string): string {
+  return `${QQ_USER_ID_PREFIX}${appId}:${openId}`
+}
+
+export function parseQQUserId(id: string): { appId: string; openId: string } | undefined {
+  if (!id.startsWith(QQ_USER_ID_PREFIX)) return undefined
+  const value = id.slice(QQ_USER_ID_PREFIX.length)
+  const separator = value.indexOf(':')
+  if (separator <= 0 || separator === value.length - 1) return undefined
+  return { appId: value.slice(0, separator), openId: value.slice(separator + 1) }
+}
+
+export function QQAvatarUrl(appId: string, openId: string): string {
+  return `https://q.qlogo.cn/qqapp/${encodeURIComponent(appId)}/${encodeURIComponent(openId)}/640`
+}
+
 export function QQImageUrl(value: string): string | undefined {
   try {
     const URLConstructor = (globalThis as typeof globalThis & { URL?: QQUrlConstructor }).URL
@@ -122,6 +140,7 @@ export function normalizeQQMessage(
     .join('\n')
   const replyTo = message.refMsgIdx ? (reference?.messageId ?? `ref:${message.refMsgIdx}`) : undefined
   if (!text.trim() && !attachments.length && !quoteText) return null
+  const senderName = message.senderName?.trim()
   return {
     platform: 'qq',
     source: 'user',
@@ -131,7 +150,12 @@ export function normalizeQQMessage(
       : `qq:${appId}:group:${message.groupOpenid}:${message.messageId}`,
     channel: isDm ? `dm:${message.senderId}` : `group:${message.groupOpenid}`,
     thread: isDm ? 'dm' : 'group',
-    sender: { id: message.senderId, isBot: false, ...(message.senderName ? { name: message.senderName } : {}) },
+    sender: {
+      id: QQUserId(appId, message.senderId),
+      isBot: false,
+      ...(senderName ? { name: senderName } : {}),
+      avatarUrl: QQAvatarUrl(appId, message.senderId)
+    },
     text,
     ...(attachments.length ? { attachments } : {}),
     mentionedBots: isDm ? [] : [appId],

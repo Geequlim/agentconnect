@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { normalizeQQMessage, type QQMessageEvent } from '@agentconnect.md/message'
+import { normalizeQQMessage, parseQQUserId, QQAvatarUrl, type QQMessageEvent } from '@agentconnect.md/message'
 import type { LoadedAgent } from '../../agents/load-agents.js'
 import type { NormalizedMessage } from '../../messages/normalized.js'
 import type { Logger } from '../../log.js'
@@ -170,7 +170,7 @@ export class QQConnection implements PlatformConnection {
   workspaceId(): string {
     return this.group.appId
   }
-  // QQ hands a bot no group or user names, so a row is told apart by its openid's tail — as senders are.
+  // QQ exposes no group name and may omit user names, so fallback rows use the OpenID tail.
   async getChannelInfo(channel: string) {
     const target = QQTargetForChannel(channel)
     const isIm = target.kind === 'c2c'
@@ -183,7 +183,12 @@ export class QQConnection implements PlatformConnection {
     return [...this.channels].map((id) => ({ id, isPrivate: true }))
   }
   async getUserProfile(user: string) {
-    return { id: user }
+    const identity = parseQQUserId(user)
+    if (!identity || identity.appId !== this.group.appId) return { id: user }
+    return {
+      id: user,
+      avatarUrl: QQAvatarUrl(identity.appId, identity.openId)
+    }
   }
   async downloadFile(source: string, maxBytes = 8 * 1024 * 1024): Promise<Buffer | null> {
     return downloadQQImage(source, maxBytes, this.abort.signal, this.deps.fetchImpl, (reason) =>

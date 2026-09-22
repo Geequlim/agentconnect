@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeQQMessage, QQImageUrl } from '../src/qq-message.js'
+import { normalizeQQMessage, parseQQUserId, QQAvatarUrl, QQImageUrl, QQUserId } from '../src/qq-message.js'
 
 const event = { kind: 'c2c', rawEventType: 'C2C_MESSAGE_CREATE', senderId: 'user', messageId: 'm1', content: 'hello' }
 describe('QQ normalization', () => {
@@ -51,7 +51,13 @@ describe('QQ normalization', () => {
     const next = normalizeQQMessage('100', { ...event, messageId: 'm2' }, 'trace')!
     expect(first.channel).toBe(next.channel)
     expect(first.thread).toBe('dm')
+    expect(first.sender).toEqual({
+      id: 'qq:user:100:user',
+      isBot: false,
+      avatarUrl: 'https://q.qlogo.cn/qqapp/100/user/640'
+    })
     expect(first.msgId).not.toBe(normalizeQQMessage('200', event, 'trace')!.msgId)
+    expect(first.sender.id).not.toBe(normalizeQQMessage('200', event, 'trace')!.sender.id)
     expect(first.channel).not.toBe(normalizeQQMessage('100', { ...event, senderId: 'other' }, 'trace')!.channel)
     expect(first.adapterExt).toEqual({ qq: { replyId: 'm1' } })
   })
@@ -79,7 +85,11 @@ describe('QQ normalization', () => {
     expect(first).toMatchObject({
       channel: 'group:g1',
       thread: 'group',
-      sender: { id: 'user', name: 'Alice' },
+      sender: {
+        id: 'qq:user:100:user',
+        name: 'Alice',
+        avatarUrl: 'https://q.qlogo.cn/qqapp/100/user/640'
+      },
       mentionedBots: ['100'],
       isDm: false,
       text: 'hello <@200>',
@@ -87,11 +97,32 @@ describe('QQ normalization', () => {
     })
     expect(next.channel).toBe(first.channel)
     expect(next.thread).toBe(first.thread)
-    expect(next.sender.id).toBe('other')
+    expect(next.sender.id).toBe('qq:user:100:other')
     expect(next.msgId).not.toBe(first.msgId)
     expect(normalizeQQMessage('100', { ...group, groupOpenid: 'g2' }, 'trace')!.channel).not.toBe(first.channel)
     expect(normalizeQQMessage('100', { ...event, senderId: 'g1' }, 'trace')!.channel).not.toBe(first.channel)
     expect(normalizeQQMessage('200', group, 'trace')!.msgId).not.toBe(first.msgId)
+  })
+  it('uses one app-scoped identity for the same sender in groups and C2C', () => {
+    const dm = normalizeQQMessage('100', event, 'trace')!
+    const group = normalizeQQMessage(
+      '100',
+      {
+        ...event,
+        kind: 'group',
+        rawEventType: 'GROUP_AT_MESSAGE_CREATE',
+        groupOpenid: 'group',
+        content: '<@100> hello'
+      },
+      'trace'
+    )!
+    expect(group.sender.id).toBe(dm.sender.id)
+  })
+  it('round-trips QQ user identities and avatar coordinates without assuming an OpenID alphabet', () => {
+    const id = QQUserId('100', 'opaque:value/with+symbols')
+    expect(parseQQUserId(id)).toEqual({ appId: '100', openId: 'opaque:value/with+symbols' })
+    expect(parseQQUserId('user')).toBeUndefined()
+    expect(QQAvatarUrl('100', 'opaque/value')).toBe('https://q.qlogo.cn/qqapp/100/opaque%2Fvalue/640')
   })
   it('ignores ambient group text and commands even when their text contains a bot mention', () => {
     for (const content of ['hello', '!cancel', '<@!100> run this']) {
