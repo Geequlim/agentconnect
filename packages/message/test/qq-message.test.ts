@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeQQMessage, parseQQUserId, QQAvatarUrl, QQImageUrl, QQUserId } from '../src/qq-message.js'
+import { normalizeQQMessage, parseQQUserId, QQAttachmentUrl, QQAvatarUrl, QQUserId } from '../src/qq-message.js'
 
 const event = { kind: 'c2c', rawEventType: 'C2C_MESSAGE_CREATE', senderId: 'user', messageId: 'm1', content: 'hello' }
 describe('QQ normalization', () => {
@@ -167,20 +167,39 @@ describe('QQ normalization', () => {
     ])
     expect(normalizeQQMessage('100', { ...event, attachments }, 'trace')?.text).toBe('hello')
   })
-  it('reports unsupported media without admitting arbitrary download destinations', () => {
+  it('preserves ordinary files while refusing arbitrary download destinations', () => {
     const msg = normalizeQQMessage(
       '100',
       {
         ...event,
         content: '',
         attachments: [
-          { content_type: 'application/pdf', url: 'https://gchat.qpic.cn/file' },
+          { content_type: 'file', filename: 'invoice.pdf', url: 'https://gchat.qpic.cn/file' },
+          {
+            content_type: 'voice',
+            filename: 'voice.silk',
+            url: 'https://gchat.qpic.cn/voice',
+            voice_wav_url: 'https://multimedia.nt.qq.com.cn/voice.wav'
+          },
           { content_type: 'image/png', url: 'http://127.0.0.1/private' }
         ]
       },
       'trace'
     )!
-    expect(msg.attachments).toBeUndefined()
+    expect(msg.attachments).toEqual([
+      expect.objectContaining({
+        id: 'm1:0',
+        name: 'invoice.pdf',
+        mimeType: 'application/pdf',
+        sourceUrl: 'https://gchat.qpic.cn/file'
+      }),
+      expect.objectContaining({
+        id: 'm1:1',
+        name: 'voice.silk',
+        mimeType: 'audio/wav',
+        sourceUrl: 'https://multimedia.nt.qq.com.cn/voice.wav'
+      })
+    ])
     expect(msg.text).toContain('attachment unavailable')
     for (const url of [
       'https://qpic.cn.attacker.test/a',
@@ -188,7 +207,7 @@ describe('QQ normalization', () => {
       'file:///a',
       'https://gchat.qpic.cn:8443/a'
     ])
-      expect(QQImageUrl(url)).toBeUndefined()
-    expect(QQImageUrl('//multimedia.nt.qq.com.cn/a')).toBe('https://multimedia.nt.qq.com.cn/a')
+      expect(QQAttachmentUrl(url)).toBeUndefined()
+    expect(QQAttachmentUrl('//multimedia.nt.qq.com.cn/a')).toBe('https://multimedia.nt.qq.com.cn/a')
   })
 })

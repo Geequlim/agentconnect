@@ -6,7 +6,8 @@ import type { Logger } from '../../log.js'
 import type { PlatformConnection } from '../contract.js'
 import { platformIntegrationConfig } from '../integration-config.js'
 import { QQSender, QQTargetForChannel, type QQRestPort, type QQStreamCursor } from './sender.js'
-import { downloadQQImage } from './images.js'
+import { QQ_ATTACHMENT_TOOL } from './attachments.js'
+import { downloadQQAttachment, downloadQQImage } from './images.js'
 import type { ImageUploader, UploadOutcome } from '../../mcp/ops/context.js'
 import { QQReferences } from './references.js'
 import { loadQQProtocol } from './sdk.js'
@@ -47,6 +48,7 @@ export class QQConnection implements PlatformConnection {
   private sender?: QQSender
   private readonly channels = new Set<string>()
   private readonly references = new QQReferences()
+  private readonly attachmentTypes = new Map<string, string>()
 
   constructor(
     readonly group: QQConnectionGroup,
@@ -133,9 +135,11 @@ export class QQConnection implements PlatformConnection {
         if (this.abort.signal.aborted) return
         const msg = this.normalizeMessage(event)
         if (!msg) return
-        for (const attachment of msg.attachments ?? [])
-          attachment.unavailableText =
-            '[QQ image unavailable: the image could not be downloaded within the size limit, its format is unsupported, or this agent cannot accept image input. Ask the user to resend a PNG, JPEG or WEBP image or select an image-capable agent.]'
+        for (const attachment of msg.attachments ?? []) {
+          if (attachment.mimeType.startsWith('image/'))
+            attachment.unavailableText =
+              '[QQ image unavailable: the image could not be downloaded within the size limit, its format is unsupported, or this agent cannot accept image input. Ask the user to resend a PNG, JPEG or WEBP image or select an image-capable agent.]'
+        }
         this.channels.add(msg.channel)
         this.deps.onMessage(msg)
       }
@@ -149,8 +153,15 @@ export class QQConnection implements PlatformConnection {
   normalizeMessage(event: QQMessageEvent): NormalizedMessage | null {
     const channel = event.kind === 'c2c' ? `dm:${event.senderId}` : `group:${event.groupOpenid}`
     const reference = event.refMsgIdx ? this.references.get(channel, event.refMsgIdx) : undefined
-    const msg = normalizeQQMessage(this.group.appId, event, randomUUID(), reference)
+    const msg = normalizeQQMessage(this.group.appId, event, randomUUID(), reference) as NormalizedMessage | null
     if (!msg) return null
+    for (const attachment of msg.attachments ?? []) {
+      attachment.readerToolName = QQ_ATTACHMENT_TOOL.name
+      if (!attachment.sourceUrl) continue
+      this.attachmentTypes.delete(attachment.sourceUrl)
+      this.attachmentTypes.set(attachment.sourceUrl, attachment.mimeType)
+    }
+    while (this.attachmentTypes.size > 2000) this.attachmentTypes.delete(this.attachmentTypes.keys().next().value!)
     this.references.remember(channel, [event.msgIdx, event.messageId], {
       messageId: event.messageId,
       sender: event.senderName ?? event.senderId,
@@ -191,8 +202,9 @@ export class QQConnection implements PlatformConnection {
     }
   }
   async downloadFile(source: string, maxBytes = 8 * 1024 * 1024): Promise<Buffer | null> {
-    return downloadQQImage(source, maxBytes, this.abort.signal, this.deps.fetchImpl, (reason) =>
-      this.deps.log.warn(`qq: image download failed (${reason})`)
+    const download = this.attachmentTypes.get(source)?.startsWith('image/') ? downloadQQImage : downloadQQAttachment
+    return download(source, maxBytes, this.abort.signal, this.deps.fetchImpl, (reason) =>
+      this.deps.log.warn(`qq: attachment download failed (${reason})`)
     )
   }
 

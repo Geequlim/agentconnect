@@ -13,11 +13,12 @@ interface QQUrlConstructor {
   new (input: string): QQUrl
 }
 
-export interface QQImageAttachment {
+export interface QQAttachment {
   content_type: string
   url: string
   filename?: string
   size?: number
+  voice_wav_url?: string
 }
 
 export interface QQMessageEvent {
@@ -29,17 +30,17 @@ export interface QQMessageEvent {
   groupOpenid?: string
   content: string
   messageId: string
-  attachments?: QQImageAttachment[]
+  attachments?: QQAttachment[]
   msgIdx?: string
   refMsgIdx?: string
-  msgElements?: { msg_idx?: string; content?: string; attachments?: QQImageAttachment[] }[]
+  msgElements?: { msg_idx?: string; content?: string; attachments?: QQAttachment[] }[]
 }
 
 export interface QQQuotedMessage {
   messageId?: string
   sender?: string
   content?: string
-  attachments?: QQImageAttachment[]
+  attachments?: QQAttachment[]
   excerpt?: boolean
 }
 
@@ -61,7 +62,7 @@ export function QQAvatarUrl(appId: string, openId: string): string {
   return `https://q.qlogo.cn/qqapp/${encodeURIComponent(appId)}/${encodeURIComponent(openId)}/640`
 }
 
-export function QQImageUrl(value: string): string | undefined {
+export function QQAttachmentUrl(value: string): string | undefined {
   try {
     const URLConstructor = (globalThis as typeof globalThis & { URL?: QQUrlConstructor }).URL
     if (!URLConstructor) return undefined
@@ -78,6 +79,31 @@ export function QQImageUrl(value: string): string | undefined {
   } catch {
     return undefined
   }
+}
+
+function qqAttachmentMimeType(contentType: string, filename?: string, wav = false): string {
+  const value = contentType.toLowerCase().split(';')[0]!.trim().replace('image/jpg', 'image/jpeg')
+  if (value === 'voice') return wav ? 'audio/wav' : 'application/octet-stream'
+  if (value !== 'file') return value || 'application/octet-stream'
+  const ext = filename?.split('.').pop()?.toLowerCase()
+  const byExtension: Record<string, string> = {
+    pdf: 'application/pdf',
+    zip: 'application/zip',
+    rar: 'application/vnd.rar',
+    '7z': 'application/x-7z-compressed',
+    doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xls: 'application/vnd.ms-excel',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ppt: 'application/vnd.ms-powerpoint',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    txt: 'text/plain',
+    csv: 'text/csv',
+    mp3: 'audio/mpeg',
+    wav: 'audio/wav',
+    mp4: 'video/mp4'
+  }
+  return (ext && byExtension[ext]) || 'application/octet-stream'
 }
 
 // Admit DMs and explicit group mentions before core routing; ambient messages must never activate through affinity.
@@ -108,9 +134,13 @@ export function normalizeQQMessage(
     ...quotedAttachments.map((attachment, index) => ({ attachment, id: `${message.refMsgIdx}:quote:${index}` }))
   ]
   for (const { attachment, id } of sources) {
-    const mimeType = attachment.content_type.toLowerCase().split(';')[0]!.trim().replace('image/jpg', 'image/jpeg')
-    const sourceUrl = QQImageUrl(attachment.url)
-    if (!sourceUrl || !['image/png', 'image/jpeg', 'image/webp'].includes(mimeType)) {
+    const voiceUrl =
+      attachment.content_type.toLowerCase().trim() === 'voice'
+        ? QQAttachmentUrl(attachment.voice_wav_url ?? '')
+        : undefined
+    const mimeType = qqAttachmentMimeType(attachment.content_type, attachment.filename, Boolean(voiceUrl))
+    const sourceUrl = voiceUrl ?? QQAttachmentUrl(attachment.url)
+    if (!sourceUrl) {
       unsupported = true
       continue
     }
@@ -118,7 +148,11 @@ export function normalizeQQMessage(
     if (attachments.some((item) => item.sourceUrl === sourceUrl)) continue
     attachments.push({
       id,
-      name: name || `image-${attachments.length + 1}.${mimeType === 'image/jpeg' ? 'jpg' : mimeType.slice(6)}`,
+      name:
+        name ||
+        (mimeType.startsWith('image/')
+          ? `image-${attachments.length + 1}.${mimeType === 'image/jpeg' ? 'jpg' : mimeType.slice(6)}`
+          : `attachment-${attachments.length + 1}`),
       mimeType,
       sourceUrl,
       ...(Number.isFinite(attachment.size) && attachment.size! >= 0 ? { size: attachment.size } : {})
@@ -128,7 +162,7 @@ export function normalizeQQMessage(
     isGroup
       ? message.content.replace(/<@!?([^>]+)>/g, (marker, id: string) => (id === appId ? '' : marker)).trim()
       : message.content,
-    ...(unsupported ? ['[QQ attachment unavailable: only PNG, JPEG and WEBP images are supported.]'] : [])
+    ...(unsupported ? ['[QQ attachment unavailable: its download URL is invalid or unsupported.]'] : [])
   ]
     .filter(Boolean)
     .join('\n')
